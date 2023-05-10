@@ -26,12 +26,22 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net"
+	"os"
+	"os/signal"
+	"syscall"
 
+	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 	"src.agwa.name/go-listener"
+)
+
+var (
+	stopping = false
 )
 
 func main() {
@@ -44,6 +54,7 @@ func main() {
 		backendCidr     []*net.IPNet
 		backendPort     int
 		nat46Prefix     net.IP
+		addRoute        bool
 	}
 	flag.Func("listen", "Socket to listen on (repeatable)", func(arg string) error {
 		flags.listen = append(flags.listen, arg)
@@ -72,6 +83,7 @@ func main() {
 		}
 		return nil
 	})
+	flag.BoolVar(&flags.addRoute, "add-local-route", false, "Insert route for nat46-prefix into the local routing table (nat46 mode)")
 	flag.Parse()
 
 	server := &Server{
@@ -103,7 +115,36 @@ func main() {
 		if flags.nat46Prefix == nil {
 			log.Fatal("-nat46-prefix must be specified when you use -mode nat46")
 		}
-		server.Backend = &TCPDialer{Allowed: flags.backendCidr, IPv6SourcePrefix: flags.nat46Prefix}
+		server.Backend = &TCPDialer{
+			Allowed:          flags.backendCidr,
+			IPv6SourcePrefix: flags.nat46Prefix,
+		}
+
+		if flags.addRoute {
+			lo, err := netlink.LinkByName("lo")
+			if err != nil {
+				log.Fatalf("Could not find loopback interface: %s", err)
+			}
+			r := netlink.Route{
+				LinkIndex: lo.Attrs().Index,
+				Type:      unix.RTN_LOCAL,
+				Dst: &net.IPNet{
+					IP:   flags.nat46Prefix,
+					Mask: net.CIDRMask(96, 128),
+				},
+				Table: 255, // 255 is local table
+			}
+			err = netlink.RouteAdd(&r)
+			if err != nil && !errors.Is(err, os.ErrExist) {
+				log.Fatalf("Failed to add route: %s", err)
+			}
+			defer func() {
+				err = netlink.RouteDel(&r)
+				if err != nil && !errors.Is(err, syscall.ESRCH) {
+					log.Printf("Failed to remove route: %s", err)
+				}
+			}()
+		}
 	default:
 		log.Fatal("-mode must be unix, tcp, or nat46")
 	}
@@ -122,9 +163,20 @@ func main() {
 		go serve(l, server)
 	}
 
-	select {}
+	// Wait for termination signal and exit cleanly
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	<-c
+	stopping = true
 }
 
 func serve(listener net.Listener, server *Server) {
-	log.Fatal(server.Serve(listener))
+	err := server.Serve(listener)
+	if nil != err && !errors.Is(err, net.ErrClosed) {
+		if stopping {
+			log.Print(err)
+		} else {
+			log.Fatal(err)
+		}
+	}
 }

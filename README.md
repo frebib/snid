@@ -50,7 +50,10 @@ It is recommended that you use one of the prefixes reserved by [RFC 8215](https:
 
 Example: `-nat46-prefix 64:ff9b:1::`
 
-Important: the prefix which you use for `-nat46-prefix` MUST be routed to the local host so that return packets can reach snid.  On Linux, the necessary route entry can be added by running:
+Important: the prefix which you use for `-nat46-prefix` MUST be routed to the local host so that return packets can reach snid.
+This can be done automatically by snid with the `-add-local-route` flag, although routing within the network will still need to be configured manually.
+
+On Linux, the necessary route entry can be added by running:
 
 ```
 ip route add local 64:ff9b:1::/96 dev lo
