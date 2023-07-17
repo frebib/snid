@@ -37,6 +37,9 @@ type TCPDialer struct {
 	Port    int
 	Allowed []*net.IPNet
 
+	// Arguments to pass to net.Dialer
+	Timeout time.Duration
+
 	IPv6SourcePrefix net.IP
 }
 
@@ -105,7 +108,7 @@ func (backend *TCPDialer) network() string {
 
 func (backend *TCPDialer) Dial(hostname string, protocols []string, clientConn ClientConn) (BackendConn, error) {
 	dialer := net.Dialer{
-		Timeout: 5 * time.Second,
+		Timeout: backend.Timeout,
 		Control: func(network string, address string, c syscall.RawConn) error {
 			if err := backend.checkBackend(address); err != nil {
 				return err

@@ -34,6 +34,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
@@ -49,6 +50,7 @@ func main() {
 		listen          []string
 		defaultHostname string
 		mode            string
+		timeout         time.Duration
 		proxyProto      bool
 		unixDirectory   string
 		backendCidr     []*net.IPNet
@@ -62,6 +64,7 @@ func main() {
 	})
 	flag.StringVar(&flags.defaultHostname, "default-hostname", "", "Default hostname if client does not provide SNI")
 	flag.StringVar(&flags.mode, "mode", "", "unix, tcp, or nat46")
+	flag.DurationVar(&flags.timeout, "timeout", 0, "Timeout when dialling the backend")
 	flag.BoolVar(&flags.proxyProto, "proxy-proto", false, "Use PROXY protocol when talking to backend (tcp, unix modes)")
 	flag.StringVar(&flags.unixDirectory, "unix-directory", "", "Path to directory containing backend UNIX sockets (unix mode)")
 	flag.Func("backend-cidr", "CIDR of allowed backends (repeatable) (tcp, nat46 modes)", func(arg string) error {
@@ -101,7 +104,11 @@ func main() {
 		if len(flags.backendCidr) == 0 {
 			log.Fatal("At least one -backend-cidr flag must be specified when you use -mode tcp")
 		}
-		server.Backend = &TCPDialer{Port: flags.backendPort, Allowed: flags.backendCidr}
+		server.Backend = &TCPDialer{
+			Port:    flags.backendPort,
+			Timeout: flags.timeout,
+			Allowed: flags.backendCidr,
+		}
 	case "nat46":
 		if flags.proxyProto {
 			log.Fatal("-proxy-proto must not be specified when you use -mode nat46")
@@ -117,6 +124,7 @@ func main() {
 		}
 		server.Backend = &TCPDialer{
 			Allowed:          flags.backendCidr,
+			Timeout:          flags.timeout,
 			IPv6SourcePrefix: flags.nat46Prefix,
 		}
 
