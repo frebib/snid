@@ -31,6 +31,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
 	"time"
 
 	"src.agwa.name/go-listener/proxy"
@@ -76,7 +77,11 @@ func (server *Server) handleConnection(clientConn net.Conn) {
 		clientHello = peekedClientHello
 		clientConn = peekedClientConn
 	} else {
-		log.Printf("Peeking client hello from %s failed: %s", clientConn.RemoteAddr(), err)
+		if !errors.Is(err, io.EOF) && !os.IsTimeout(err) {
+			// Ignore client EOF/timeout errors as they're almost certainly
+			// scanners closing the connection immediately
+			log.Printf("Peeking client hello from %s failed: %s", clientConn.RemoteAddr(), err)
+		}
 		return
 	}
 
