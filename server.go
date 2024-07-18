@@ -34,6 +34,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"src.agwa.name/go-listener/proxy"
 	"src.agwa.name/go-listener/tlsutil"
 )
@@ -42,6 +44,8 @@ type Server struct {
 	Backend         BackendDialer
 	ProxyProtocol   bool
 	DefaultHostname string
+
+	metrics ServerCollector
 }
 
 func (server *Server) peekClientHello(clientConn net.Conn) (*tls.ClientHelloInfo, net.Conn, error) {
@@ -60,7 +64,7 @@ func (server *Server) peekClientHello(clientConn net.Conn) (*tls.ClientHelloInfo
 
 	if clientHello.ServerName == "" {
 		if server.DefaultHostname == "" {
-			return nil, nil, errors.New("no SNI provided and DefaultHostname not set")
+			return nil, nil, ErrNoSNI
 		}
 		clientHello.ServerName = server.DefaultHostname
 	}
@@ -68,8 +72,8 @@ func (server *Server) peekClientHello(clientConn net.Conn) (*tls.ClientHelloInfo
 	return clientHello, peekedClientConn, err
 }
 
-func (server *Server) handleConnection(clientConn net.Conn) {
-	defer func() { clientConn.Close() }()
+func (server *Server) handleConnection(clientConn net.Conn) error {
+	defer clientConn.Close()
 
 	var clientHello *tls.ClientHelloInfo
 
@@ -77,18 +81,20 @@ func (server *Server) handleConnection(clientConn net.Conn) {
 		clientHello = peekedClientHello
 		clientConn = peekedClientConn
 	} else {
+		// Ignore client EOF/timeout errors as they're almost certainly
+		// scanners closing the connection immediately
 		if !errors.Is(err, io.EOF) && !os.IsTimeout(err) {
-			// Ignore client EOF/timeout errors as they're almost certainly
-			// scanners closing the connection immediately
 			log.Printf("Peeking client hello from %s failed: %s", clientConn.RemoteAddr(), err)
+			return nil
 		}
-		return
+
+		return err
 	}
 
 	backendConn, err := server.Backend.Dial(clientHello.ServerName, clientHello.SupportedProtos, clientConn)
 	if err != nil {
 		log.Printf("Ignoring connection from %s to %s because dialing backend failed: %s", clientConn.RemoteAddr(), clientHello.ServerName, err)
-		return
+		return err
 	}
 	defer backendConn.Close()
 
@@ -96,28 +102,61 @@ func (server *Server) handleConnection(clientConn net.Conn) {
 		header := proxy.Header{RemoteAddr: clientConn.RemoteAddr(), LocalAddr: clientConn.LocalAddr()}
 		if _, err := backendConn.Write(header.Format()); err != nil {
 			log.Printf("Error writing PROXY header to backend: %s", err)
-			return
+			return err
 		}
 	}
 
+	// FIXME: Count sent/recvd bytes (wrap clientConn and count in there?)
 	go func() {
 		io.Copy(backendConn, clientConn)
 		backendConn.CloseWrite()
 	}()
 
 	io.Copy(clientConn, backendConn)
+	return nil
+}
+
+func errorLabelValue(err error) string {
+	var edb *DisallowedBackend
+
+	switch {
+	case os.IsTimeout(err):
+		return "timeout"
+	case errors.Is(err, ErrNoSNI):
+		return "no-sni"
+	case errors.Is(err, io.EOF):
+		return "eof"
+	case errors.As(err, &edb):
+		return "disallowed-backend"
+	default:
+		return "unknown"
+	}
 }
 
 func (server *Server) Serve(listener net.Listener) error {
+	labels := prometheus.Labels{"listener": listener.Addr().String()}
+	connCount := server.metrics.connCount.With(labels)
+	errCount := server.metrics.connErrors.MustCurryWith(labels)
+	inflight := server.metrics.inflight.With(labels)
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			if netErr, isNetErr := err.(net.Error); isNetErr && netErr.Temporary() {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Temporary() {
 				log.Printf("Temporary network error accepting connection: %s", netErr)
+				errCount.With(prometheus.Labels{"error": "transient"}).Inc()
 				continue
 			}
 			return err
 		}
-		go server.handleConnection(conn)
+		go func(conn net.Conn) {
+			connCount.Inc()
+			inflight.Inc()
+			err := server.handleConnection(conn)
+			if err != nil {
+				errCount.With(prometheus.Labels{"error": errorLabelValue(err)}).Inc()
+			}
+			inflight.Dec()
+		}(conn)
 	}
 }

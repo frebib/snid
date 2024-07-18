@@ -57,7 +57,7 @@ func (backend *TCPDialer) checkBackend(address string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("%s is not an allowed backend", ipaddress)
+	return &DisallowedBackend{Backend: ipaddress}
 }
 
 func (backend *TCPDialer) bindIPv6(sock syscall.RawConn, clientConn ClientConn) error {
