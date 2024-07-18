@@ -3,7 +3,7 @@ WORKDIR /build/snid
 COPY go.mod go.sum .
 RUN go mod download
 COPY *.go .
-RUN go build -o /usr/bin/snid .
+RUN go build -trimpath -o /usr/bin/snid .
 
 FROM alpine
 COPY --from=build /usr/bin/snid /usr/bin/snid
