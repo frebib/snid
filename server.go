@@ -91,12 +91,15 @@ func (server *Server) handleConnection(clientConn net.Conn) error {
 		return err
 	}
 
+	start := time.Now()
 	backendConn, err := server.Backend.Dial(clientHello.ServerName, clientHello.SupportedProtos, clientConn)
 	if err != nil {
 		log.Printf("Ignoring connection from %s to %s because dialing backend failed: %s", clientConn.RemoteAddr(), clientHello.ServerName, err)
 		return err
 	}
 	defer backendConn.Close()
+	dialTime := time.Since(start)
+	server.metrics.setupTime.Observe(dialTime.Seconds())
 
 	if server.ProxyProtocol {
 		header := proxy.Header{RemoteAddr: clientConn.RemoteAddr(), LocalAddr: clientConn.LocalAddr()}
