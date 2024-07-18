@@ -109,7 +109,6 @@ func (server *Server) handleConnection(clientConn net.Conn) error {
 		}
 	}
 
-	// FIXME: Count sent/recvd bytes (wrap clientConn and count in there?)
 	go func() {
 		io.Copy(backendConn, clientConn)
 		backendConn.CloseWrite()
@@ -152,6 +151,10 @@ func (server *Server) Serve(listener net.Listener) error {
 			}
 			return err
 		}
+
+		// Instrument bytes read/written to/from client connections
+		conn = InstrumentedConn(conn, server.metrics.clientReadBytes, server.metrics.clientWriteBytes)
+
 		go func(conn net.Conn) {
 			connCount.Inc()
 			inflight.Inc()
