@@ -72,7 +72,7 @@ func (server *Server) peekClientHello(clientConn net.Conn) (*tls.ClientHelloInfo
 	return clientHello, peekedClientConn, err
 }
 
-func (server *Server) handleConnection(clientConn net.Conn) error {
+func (server *Server) handleConnection(clientConn net.Conn, labels prometheus.Labels) error {
 	defer clientConn.Close()
 
 	var clientHello *tls.ClientHelloInfo
@@ -91,15 +91,19 @@ func (server *Server) handleConnection(clientConn net.Conn) error {
 		return err
 	}
 
+	backend := clientHello.ServerName
+	labels = prometheus.Labels{"listener": labels["listener"], "backend": backend}
+	server.metrics.beConnCount.With(labels).Inc()
+
 	start := time.Now()
-	backendConn, err := server.Backend.Dial(clientHello.ServerName, clientHello.SupportedProtos, clientConn)
+	backendConn, err := server.Backend.Dial(backend, clientHello.SupportedProtos, clientConn)
 	if err != nil {
-		log.Printf("Ignoring connection from %s to %s because dialing backend failed: %s", clientConn.RemoteAddr(), clientHello.ServerName, err)
+		log.Printf("Ignoring connection from %s to %s because dialing backend failed: %s", clientConn.RemoteAddr(), backend, err)
 		return err
 	}
 	defer backendConn.Close()
 	dialTime := time.Since(start)
-	server.metrics.setupTime.Observe(dialTime.Seconds())
+	server.metrics.beSetupTime.With(labels).Observe(dialTime.Seconds())
 
 	if server.ProxyProtocol {
 		header := proxy.Header{RemoteAddr: clientConn.RemoteAddr(), LocalAddr: clientConn.LocalAddr()}
@@ -108,6 +112,12 @@ func (server *Server) handleConnection(clientConn net.Conn) error {
 			return err
 		}
 	}
+
+	// Instrument bytes to/from client connection
+	// Note that read/write are flipped because reading from the client is
+	// counted as writing to the backend. Instrumenting this could be done
+	// either way around, but this was easier
+	clientConn = InstrumentedConn(clientConn, server.metrics.beWriteBytes.With(labels), server.metrics.beReadBytes.With(labels))
 
 	go func() {
 		io.Copy(backendConn, clientConn)
@@ -152,13 +162,10 @@ func (server *Server) Serve(listener net.Listener) error {
 			return err
 		}
 
-		// Instrument bytes read/written to/from client connections
-		conn = InstrumentedConn(conn, server.metrics.clientReadBytes, server.metrics.clientWriteBytes)
-
 		go func(conn net.Conn) {
 			connCount.Inc()
 			inflight.Inc()
-			err := server.handleConnection(conn)
+			err := server.handleConnection(conn, labels)
 			if err != nil {
 				errCount.With(prometheus.Labels{"error": errorLabelValue(err)}).Inc()
 			}
