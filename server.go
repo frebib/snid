@@ -32,7 +32,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -127,27 +126,6 @@ func (server *Server) handleConnection(clientConn net.Conn, labels prometheus.La
 
 	io.Copy(clientConn, backendConn)
 	return nil
-}
-
-func errorLabelValue(err error) string {
-	var edb *DisallowedBackend
-
-	switch {
-	case os.IsTimeout(err):
-		return "timeout"
-	case errors.Is(err, ErrNoSNI):
-		return "no-sni"
-	case errors.Is(err, io.EOF):
-		return "eof"
-	case errors.As(err, &edb):
-		return "disallowed-backend"
-	case errors.Is(err, syscall.ENETUNREACH):
-		return "network-unreachable"
-	case errors.Is(err, syscall.EHOSTUNREACH):
-		return "no-route-to-host"
-	default:
-		return "unknown"
-	}
 }
 
 func (server *Server) Serve(listener net.Listener) error {
