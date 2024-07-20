@@ -32,6 +32,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -140,6 +141,10 @@ func errorLabelValue(err error) string {
 		return "eof"
 	case errors.As(err, &edb):
 		return "disallowed-backend"
+	case errors.Is(err, syscall.ENETUNREACH):
+		return "network-unreachable"
+	case errors.Is(err, syscall.EHOSTUNREACH):
+		return "no-route-to-host"
 	default:
 		return "unknown"
 	}
