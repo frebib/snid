@@ -85,9 +85,7 @@ func (server *Server) handleConnection(clientConn net.Conn, labels prometheus.La
 		// scanners closing the connection immediately
 		if !errors.Is(err, io.EOF) && !os.IsTimeout(err) {
 			log.Printf("Peeking client hello from %s failed: %s", clientConn.RemoteAddr(), err)
-			return nil
 		}
-
 		return err
 	}
 
