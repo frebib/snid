@@ -30,12 +30,17 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/exporter-toolkit/web"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 	"src.agwa.name/go-listener"
@@ -57,6 +62,9 @@ func main() {
 		backendPort     int
 		nat46Prefix     net.IP
 		addRoute        bool
+
+		metricsAddr   string
+		webConfigFile string
 	}
 	flag.Func("listen", "Socket to listen on (repeatable)", func(arg string) error {
 		flags.listen = append(flags.listen, arg)
@@ -87,11 +95,14 @@ func main() {
 		return nil
 	})
 	flag.BoolVar(&flags.addRoute, "add-local-route", false, "Insert route for nat46-prefix into the local routing table (nat46 mode)")
+	flag.StringVar(&flags.metricsAddr, "metrics-addr", ":8080", "Address to bind metrics server")
+	flag.StringVar(&flags.webConfigFile, "web-config-file", "", "Path to web-config file for metrics TLS")
 	flag.Parse()
 
 	server := &Server{
 		ProxyProtocol:   flags.proxyProto,
 		DefaultHostname: flags.defaultHostname,
+		metrics:         NewServerCollector(),
 	}
 
 	switch flags.mode {
@@ -169,6 +180,38 @@ func main() {
 
 	for _, l := range listeners {
 		go serve(l, server)
+	}
+
+	if flags.metricsAddr != "" {
+		registry := prometheus.NewRegistry()
+		registry.MustRegister(&server.metrics)
+
+		handlerOpts := promhttp.HandlerOpts{
+			ErrorLog:          log.Default(),
+			EnableOpenMetrics: true,
+		}
+		router := http.NewServeMux()
+		router.Handle("/metrics", promhttp.HandlerFor(registry, handlerOpts))
+		httpServer := &http.Server{
+			Addr:    flags.metricsAddr,
+			Handler: router,
+		}
+		config := web.FlagConfig{
+			WebListenAddresses: &[]string{flags.metricsAddr},
+			WebConfigFile:      &flags.webConfigFile,
+		}
+		logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+		httpListen, err := net.Listen("tcp", flags.metricsAddr)
+		if err != nil {
+			log.Fatalf("metrics: %s", err)
+		}
+		defer httpListen.Close()
+
+		err = web.Serve(httpListen, httpServer, &config, logger)
+		if !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err.Error())
+		}
 	}
 
 	// Wait for termination signal and exit cleanly
