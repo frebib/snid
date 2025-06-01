@@ -29,13 +29,13 @@ def step(arch, key):
     "steps": [
       {
         "name": "build",
-        "image": "spritsail/docker-build",
+        "image": "registry.spritsail.io/spritsail/docker-build",
         "pull": "always",
       },
       {
         "name": "publish",
         "pull": "always",
-        "image": "spritsail/docker-publish",
+        "image": "registry.spritsail.io/spritsail/docker-publish",
         "settings": {
           "registry": {"from_secret": "registry_url"},
           "login": {"from_secret": "registry_login"},
@@ -60,7 +60,7 @@ def publish(depends_on):
     "steps": [
       {
         "name": "publish",
-        "image": "spritsail/docker-multiarch-publish",
+        "image": "registry.spritsail.io/spritsail/docker-multiarch-publish",
         "pull": "always",
         "settings": {
           "tags": [
@@ -68,8 +68,9 @@ def publish(depends_on):
           ],
           "src_registry": {"from_secret": "registry_url"},
           "src_login": {"from_secret": "registry_login"},
+          "dest_registry": "registry.spritsail.io",
           "dest_repo": repo,
-          "dest_login": {"from_secret": "docker_login"},
+          "dest_login": {"from_secret": "spritsail_login"},
         },
         "when": {
           "branch": branches,
